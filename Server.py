@@ -1,9 +1,9 @@
 #!/usr/bin/python
 # This is the server application that listens for connections and
-# unpacks archives in its own thread. 
-# 
+# unpacks archives in its own thread.
+#
 # Copyright 2013 Emil Edholm <emil@edholm.it>
-# 
+#
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
 # the Free Software Foundation, either version 3 of the License, or
@@ -17,24 +17,54 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-import socket
-import threading
+#import socket
+#import threading
 import socketserver
-import json, os, time
+import json
+import os
+import time
 
 # The protocol this server supports/manages.
 protocol = "RU/0.3"
+
+
+def _recvall(sock, n):
+    data = b''
+    while len(data) < n:
+        packet = sock.recv(n - len(data))
+        if not packet:
+            return None
+        data += packet
+    return data
+
+
+def receive(sock):
+    # receive length first.
+    rawLength = _recvall(sock, 4)
+    if not rawLength:
+        return None
+    from struct import unpack
+    msgLen = unpack('!I', rawLength)[0]
+
+    return _recvall(sock, msgLen).decode()
+
 
 class ThreadedTCPRequestHandler(socketserver.BaseRequestHandler):
 
     def handle(self):
         addr, port = self.client_address
         print("Connection from {}:{}".format(addr, port))
-        msg = json.loads(self.request.recv(1024).decode())
-        
+        msgRaw = receive(self.request)
+        msg = ''
+        if msgRaw is not None:
+            msg = json.loads(msgRaw)
+        else:
+            print("{}:{} closed the connection".format(addr, port))
+            return False
+
         print("Received: {}".format(msg))
 
-        # Try calling the method requested 
+        # Try calling the method requested
         try:
             func_name = "handle_" + msg['method'].lower()
             func = getattr(self, func_name)
@@ -42,7 +72,7 @@ class ThreadedTCPRequestHandler(socketserver.BaseRequestHandler):
         except AttributeError:
             self.reply_with_code('501', 'Not Implemented')
 
-    def verify_protocol(self,client_protocol):
+    def verify_protocol(self, client_protocol):
         """Verify we're using the same protocol."""
         if not protocol == client_protocol:
             self.reply_with_code('506', 'Protocol Not Supported')
@@ -51,60 +81,64 @@ class ThreadedTCPRequestHandler(socketserver.BaseRequestHandler):
 
     def handle_bepa(self, msg):
         self.reply_with_code()
-        time.sleep(1)
         self.reply_with_code()
         self.reply_with_code()
-
 
     def handle_get(self, msg):
-        """ The GET method is equivalent to the *nix command ls
-            The method will return the list in an arbitrarily order"""
+        """ The GET method is equivalent to the *nix command ls.
+
+            The method will return the list in an arbitrarily order
+
+        """
         if not self.verify_protocol(msg['protocol']):
             return
-        
+
         if os.path.lexists(msg['path']):
-             print("Replying with directory contents")
-             dir_contents = "\n".join(os.listdir(msg['path']))
-             self.reply_with_code(data = dir_contents)
+            print("Replying with directory contents")
+            dir_contents = "\n".join(os.listdir(msg['path']))
+            self.reply_with_code(data=dir_contents)
         else:
-             self.reply_with_code(404, "Not Found")
+            self.reply_with_code(404, "Not Found")
 
     def handle_unpack(self, msg):
         if not self.verify_protocol(msg['protocol']):
             return
 
         # Set client ready for receiveing progress output
-        self.reply_with_code('202', 'Accepted')  
-        time.sleep(1)  
+        self.reply_with_code('202', 'Accepted')
+        time.sleep(1)
         i = 0
         while i <= 100:
             progress = "{}%".format(i)
             self.reply_with_code("206", "Partial Content", progress)
             time.sleep(0.1)
             i += 1
-        time.sleep(1)  
+        time.sleep(1)
         self.reply_with_code()
         print("done")
 
-    def reply_with_code(self, code = '200', phrase = 'OK', data = ""):
-            reply = json.dumps({
-                'protocol' : protocol, 
-                'code'     : code, 
-                'phrase'   : phrase,
-                'data'     : data})
-            self.request.sendall(reply.encode())
+    def reply_with_code(self, code='200', phrase='OK', data=''):
+        from struct import pack
+        reply = json.dumps({
+            'protocol': protocol,
+            'code':     code,
+            'phrase':   phrase,
+            'data':     data}).encode()
+        # Size of message then actual message
+        msg = pack("!I", len(reply)) + reply
+        self.request.sendall(msg)
+
 
 class ThreadedTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
-    pass
+    def __init__(self, server_address, RequestHandlerClass):
+        self.allow_reuse_address = True
+        socketserver.TCPServer.__init__(self, server_address,
+                                        RequestHandlerClass)
 
 
-if  __name__ =='__main__':
-    HOST, PORT = "localhost", 1337 
-
+if __name__ == '__main__':
+    HOST, PORT = "localhost", 1337
     server = ThreadedTCPServer((HOST, PORT), ThreadedTCPRequestHandler)
-    server.allow_reuse_address = True
-    ip, port = server.server_address
-
     try:
         print("Server listening on {}:{}".format(HOST, PORT))
         server.serve_forever()
