@@ -48,7 +48,8 @@ def receive(sock):
     from struct import unpack
     msgLen = unpack('!I', rawLength)[0]
 
-    return recvall(sock, msgLen).decode()
+    # TODO: None type fails?
+    return json.loads(recvall(sock, msgLen).decode())
 
 
 class Client(object):
@@ -74,17 +75,24 @@ if __name__ == '__main__':
     client = Client()
     success = client.connect(HOST, PORT)
     if success:
-        msg = {'method':   'bepa',
+        msg = {'method':   'unpack',
                'path':     '/home/eda/',
-               'protocol': 'RU/0.3'}
+               'protocol': 'RU/0.4'}
         send(client.sock, json.dumps(msg))
 
         msg = receive(client.sock)
-        print(msg + "\n")
-        msg = receive(client.sock)
-        print(msg + "hej\n")
-        msg = receive(client.sock)
         print(msg)
+        if msg['code'] == "202":
+            print("bop")
+            msg = receive(client.sock)
+            while msg['code'] == "206":
+                msg = receive(client.sock)
+                print(msg['data'] + "\r", end="")
+            print("done")
+        #msg = receive(client.sock)
+        #print(msg + "hej\n")
+        #msg = receive(client.sock)
+        #print(msg)
         #print(msg['code'])
         #if msg['code'] == '202':
         #    print("Ready to receive progress")
