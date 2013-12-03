@@ -27,13 +27,14 @@ import os
 import time
 
 # The protocol this server supports/manages.
-protocol = "RU/0.4"
+PROTOCOL = "RU/0.4"
 
 
-def _recvall(sock, n):
+def _recvall(sock, bytecount):
+    """ Read n bytes from sock."""
     data = b''
-    while len(data) < n:
-        packet = sock.recv(n - len(data))
+    while len(data) < bytecount:
+        packet = sock.recv(bytecount - len(data))
         if not packet:
             return None
         data += packet
@@ -41,33 +42,44 @@ def _recvall(sock, n):
 
 
 def receive(sock):
+    """ Receive "one" message from socket. """
     # receive length first.
-    rawLength = _recvall(sock, 4)
-    if not rawLength:
+    rawlength = _recvall(sock, 4)
+    if not rawlength:
         return None
     from struct import unpack
-    msgLen = unpack('!I', rawLength)[0]
+    msglen = unpack('!I', rawlength)[0]
 
-    return _recvall(sock, msgLen).decode()
+    return _recvall(sock, msglen).decode()
+
+
+def verify_protocol(client_protocol):
+    """Verify we're using the same protocol."""
+    return PROTOCOL == client_protocol
 
 
 class ThreadedTCPRequestHandler(socketserver.BaseRequestHandler):
+    """ Handles incoming tcp-requests. """
 
     def handle(self):
         addr, port = self.client_address
         import datetime
-        print("Connection from {}:{} on {} {}".format(addr, port, datetime.datetime.now() , "{"))
-        msgRaw = receive(self.request)
+        print("Connection from {}:{} on {} {}".format(addr,
+                                                      port,
+                                                      datetime.datetime.now(),
+                                                      "{"))
+        msgraw = receive(self.request)
         msg = ''
-        if msgRaw is not None:
-            msg = json.loads(msgRaw)
+        if msgraw is not None:
+            msg = json.loads(msgraw)
         else:
             print("{}:{} closed the connection".format(addr, port))
             return False
 
-        print("\tRequest: method {} over protocol {} from {}:{}".format(msg['method'], msg['protocol'], addr, port))
+        print("\tRequest: method {} over protocol {} from {}:{}".
+              format(msg['method'], msg['protocol'], addr, port))
 
-        if not self.verify_protocol(msg['protocol']):
+        if not verify_protocol(msg['protocol']):
             self.reply_with_code('506', 'Protocol Not Supported')
             print("}")
             return
@@ -80,12 +92,6 @@ class ThreadedTCPRequestHandler(socketserver.BaseRequestHandler):
         except AttributeError:
             self.reply_with_code('501', 'Not Implemented')
         print("}")
-
-    def verify_protocol(self, client_protocol):
-        """Verify we're using the same protocol."""
-        if not protocol == client_protocol:
-            return False
-        return True
 
     def handle_get(self, msg):
         """ The GET method is equivalent to the *nix command ls.
@@ -101,6 +107,7 @@ class ThreadedTCPRequestHandler(socketserver.BaseRequestHandler):
             self.reply_with_code(404, "Not Found")
 
     def handle_unpack(self, msg):
+        """ Handle the request for the unpack method. """
         # Set client ready for receiveing progress output
         self.reply_with_code('202', 'Accepted')
         time.sleep(1)
@@ -115,11 +122,13 @@ class ThreadedTCPRequestHandler(socketserver.BaseRequestHandler):
         print("done")
 
     def reply_with_code(self, code='200', phrase='OK', data=''):
+        """ Reply to the client with the given status code and data. """
         addr, port = self.client_address
-        print("\tReply: code {} - {} to {}:{}".format(code, phrase, addr, port))
+        print("\tReply: code {} - {} to {}:{}".
+              format(code, phrase, addr, port))
         from struct import pack
         reply = json.dumps({
-            'protocol': protocol,
+            'protocol': PROTOCOL,
             'code':     code,
             'phrase':   phrase,
             'data':     data}).encode()
@@ -129,6 +138,7 @@ class ThreadedTCPRequestHandler(socketserver.BaseRequestHandler):
 
 
 class ThreadedTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
+    """ The TCP server class that spawns a new thread for each request. """
     def __init__(self, server_address, RequestHandlerClass):
         self.allow_reuse_address = True
         socketserver.TCPServer.__init__(self, server_address,
@@ -137,10 +147,10 @@ class ThreadedTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
 
 if __name__ == '__main__':
     HOST, PORT = "localhost", 1337
-    server = ThreadedTCPServer((HOST, PORT), ThreadedTCPRequestHandler)
+    SERVER = ThreadedTCPServer((HOST, PORT), ThreadedTCPRequestHandler)
     try:
         print("Server listening on {}:{}".format(HOST, PORT))
-        server.serve_forever()
+        SERVER.serve_forever()
     except KeyboardInterrupt:
         print("Shutting down server...")
-        server.shutdown()
+        SERVER.shutdown()
