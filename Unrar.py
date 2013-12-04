@@ -1,7 +1,6 @@
 """ Prepares and processes the unrar command. """
 from subprocess import Popen, PIPE, STDOUT
 import re
-import os
 import signal
 
 
@@ -25,23 +24,33 @@ class Unrar(object):
             11:  "Bad password",
             255: "User break"}
 
-    def extract(self, rarfile):
-        """ unrar the supplied file to the path supplied in init. """
-        cmd = self._build_unrar_cmd(rarfile)
-        self._execute(cmd, rarfile)
+    def extract(self, rarfile, progress_queue):
+        """ unrar the supplied file to the path supplied in init.
+            The progress is put on the queue as the tuple
+            (filename, progress) until unrar exits when the tuple
+            ("exit", exitcode) is put in the queue to signal end.
+            Returns the exit code of unrar
 
-    def explain_exit_code(self, exitcode):
+        """
+        import queue
+        if not isinstance(progress_queue, queue.Queue):
+            raise TypeError("Not a valid queue supplied. Got " +
+                            type(progress_queue))
+        cmd = self._build_unrar_cmd(rarfile)
+        return self._execute(cmd, rarfile, progress_queue)
+
+    def explain_exitcode(self, exitcode):
         """ Lookup the associated phrase with a given exit code. """
         return self.exit_codes[exitcode]
 
     def _build_unrar_cmd(self, rarfile):
         """ Build the shell command for unrar. """
-        cmd = "unrar x -ai -o- -y -idc "
+        cmd = "unrar x -ai -o+ -y -idc "
         cmd = cmd + re.escape(rarfile) + " " + re.escape(self.extract_path)
         from shlex import split
         return split(cmd)
 
-    def _execute(self, unrarcmd, rarfile):
+    def _execute(self, unrarcmd, rarfile, progress_queue):
         """ Execute the unrarcmd and prints the parsed progress bar.
             For unrar return codes, see: errhnd.hpp in source code
             Returns the exit code
@@ -51,24 +60,23 @@ class Unrar(object):
         filename = basename(rarfile)
         progress = 0
         retcode = 0
-
         proc = Popen(unrarcmd, stdout=PIPE, stderr=STDOUT)
         try:
             while True:
                 retcode = proc.poll()  # None while subprocess is running
                 # Using word-for-word for nicer progress output.
                 word = _read_word(proc.stdout)
-
                 match = self.regex.search(word)
                 if match:
                     progress = int(match.group(1))
-                    _update_progress(progress, filename)
+                    progress_queue.put((filename, progress))
 
                 if retcode is not None:
                     if retcode == 0:
                         # We'll never match 100% since it is overwritten;
                         # so our workaround is adding one to the progress
                         progress += 1
+                        progress_queue.put((filename, progress))
                     #print("Return code: " + str(retcode) +
                           #" - " + self.exit_codes[retcode])
                     break
@@ -77,17 +85,14 @@ class Unrar(object):
             proc.wait()
             retcode = proc.returncode
 
-        append = None
-        if retcode != 0:
-            append = self.explain_exit_code(retcode)
-        _update_progress(progress, filename, append)
-        print()
+        progress_queue.put(("exit", retcode))
         return retcode
 
 
-def _update_progress(percentage, file, append=None):
+def print_progressbar(percentage, file, status=None):
     """ Print a simple progress bar. """
-    _, cols = os.popen("stty size", "r").read().split()
+    from os import popen
+    _, cols = popen("stty size", "r").read().split()
     half = int(int(cols) / 2)
 
     # Not very pretty... Sorry :p
@@ -96,8 +101,8 @@ def _update_progress(percentage, file, append=None):
     fmt = "[{0:" + str(half - 6) + "s}] {1:<3}%"
     print(tmp.ljust(half - 3) + fmt.format('#' * int((percentage / 100) *
          (half - 6)), percentage).rjust(half), end="")
-    if append:
-        print("\n(" + append + ")", end="")
+    if status:
+        print("\n(" + status + ")", end="")
 
 
 def _read_word(stdout):
