@@ -115,3 +115,16 @@ def _read_word(stdout):
         if not char:
             break
     return buffer.decode()
+
+
+def is_rarfile(path):
+    """ Returns True if path is valid RAR file, else False. """
+    try:
+        with open(path, "rb") as rarfile:
+            # Read the 7 byte magic marker
+            marker = rarfile.read(7)
+            result = bytes.fromhex("526172211a0700")
+            return marker == result
+    except IOError:
+        # Error or file does not exist
+        return False
